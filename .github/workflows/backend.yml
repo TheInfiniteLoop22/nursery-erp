@@ -8,6 +8,14 @@ on:
   pull_request:
     paths: ["backend/**", ".github/workflows/backend.yml"]
 
+# Least privilege for the default GITHUB_TOKEN; superseded PR runs are cancelled, deploys never are.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 defaults:
   run:
     working-directory: backend
