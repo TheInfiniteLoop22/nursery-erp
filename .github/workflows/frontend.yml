@@ -1,0 +1,88 @@
+name: Frontend CI/CD
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+  pull_request:
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  verify:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Unit tests (Zod schemas)
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --build-arg NEXT_PUBLIC_API_URL="${{ vars.NEXT_PUBLIC_API_URL }}" -t erp-frontend:ci .
+
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    needs: [verify, docker]
+    # Enabled by setting the repo variable RENDER_DEPLOY_ENABLED=true (needs the RENDER_API_KEY secret).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.RENDER_DEPLOY_ENABLED == 'true'
+    environment: production
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Deploy on Render and wait until live
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ vars.RENDER_FRONTEND_SERVICE_ID }}
+        run: |
+          test -n "$RENDER_API_KEY" || { echo "RENDER_API_KEY secret is not set"; exit 1; }
+          test -n "$SERVICE_ID" || { echo "RENDER_FRONTEND_SERVICE_ID variable is not set"; exit 1; }
+          deploy_id=$(curl --fail -sS -X POST "https://api.render.com/v1/services/$SERVICE_ID/deploys"             -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'             | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Render deploy id: $deploy_id"
+          for i in $(seq 1 90); do
+            status=$(curl --fail -sS "https://api.render.com/v1/services/$SERVICE_ID/deploys/$deploy_id"               -H "Authorization: Bearer $RENDER_API_KEY" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+            echo "[$i] $status"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|pre_deploy_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "Timed out waiting for the deploy"; exit 1
+
+      - name: Smoke test frontend login page
+        env:
+          BASE_URL: ${{ vars.RENDER_FRONTEND_URL }}
+        run: curl --fail -sS --retry 12 --retry-delay 10 --retry-all-errors "$BASE_URL/login"

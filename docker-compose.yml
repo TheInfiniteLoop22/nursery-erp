@@ -1,0 +1,46 @@
+# One-command local stack: PostgreSQL + API + web app.
+#   docker compose up --build
+#   docker compose exec api python scripts/seed_all.py
+#   docker compose exec api python scripts/seed_demo.py     # optional demo orders and day sheets
+# Then open http://localhost:3030 (admin / admin123). API docs: http://localhost:8000/docs
+# For local development only; production uses Render + Neon (see render.yaml).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nursery_erp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nursery_erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/nursery_erp
+      SECRET_KEY: ${SECRET_KEY:-local-dev-only-change-me}
+      CORS_ORIGINS: http://localhost:3030
+      WEB_CONCURRENCY: "1"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports:
+      - "3030:3030"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

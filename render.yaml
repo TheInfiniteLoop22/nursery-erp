@@ -1,0 +1,41 @@
+# Render Blueprint: both services run from Docker images built from this repo.
+# Deploys are triggered by GitHub Actions after CI passes (see .github/workflows), which
+# calls the Render API and waits until the new deploy is live, so auto-deploy is off here.
+#
+# These match the services that already exist (created through the Render API/MCP):
+#   windscapes-dev-api -> https://windscapes-dev-api.onrender.com
+#   windscapes-dev-web -> https://windscapes-dev-web.onrender.com
+#
+# Free-tier notes: each free web service sleeps after ~15 minutes without traffic and
+# takes about a minute to wake on the next request.
+services:
+  - type: web
+    name: windscapes-dev-api
+    runtime: docker
+    plan: free
+    region: ohio
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: DATABASE_URL # Neon connection string (postgresql+psycopg://...?sslmode=require)
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS # the frontend's public URL
+        sync: false
+      - key: WEB_CONCURRENCY # one worker: live updates use an in-process event bus
+        value: "1"
+
+  - type: web
+    name: windscapes-dev-web
+    runtime: docker
+    plan: free
+    region: ohio
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    autoDeploy: false
+    envVars:
+      - key: NEXT_PUBLIC_API_URL # baked into the JS bundle at build time (Render passes env vars as Docker build args)
+        sync: false
